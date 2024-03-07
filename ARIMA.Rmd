@@ -1,0 +1,170 @@
+---
+title: "Forecasting Monthly Bear Production in Aus using ARIMA"
+author: "Umer Farooq"
+date: "2024-02-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(fabletools)
+library(fpp3)
+library(forecast)
+```
+
+```{r warning=FALSE, message=FALSE}
+df <- read_csv("https://raw.githubusercontent.com/Umerfarooq122/ARIMA-in-R/main/monthly-beer-production-in-austr.csv")
+beer <- df|>
+  mutate(Month = yearmonth(Month))|>
+  rename(production = `Monthly beer production`)
+```
+
+
+
+```{r}
+beer <- beer|>
+  as_tsibble(index = Month)
+beer_ts <- beer[1:432,]
+```
+
+
+```{r}
+autoplot(beer_ts)+labs(y = 'Production (Mega Litres)', title = "Beer Production in Australia (Monthly)")
+```
+
+```{r}
+ACF(beer_ts, lag_max = 36)|>
+  autoplot()
+```
+
+
+```{r}
+beer_ts |>
+  gg_season(production, labels = "both") +
+  labs(y = "$ (Mega Litres)",
+       title = "Seasonal plot: Monthly Beer Production in Australia")
+```
+
+
+
+
+```{r}
+beer_ts |>
+  gg_subseries(production) +
+  labs(y = "$ (Mega Litres)",
+       title = "Monthly Beer Production in Australia")
+```
+
+```{r}
+lambda <- beer_ts|>
+  features(production, features = guerrero)|>
+  pull(lambda_guerrero)
+```
+
+```{r}
+beer_ts|>
+  autoplot(log(production)) + labs(y = 'Production (Mega Litres)', title = "Transformed Beer Production in Australia (Monthly)")
+```
+
+```{r}
+beer_ts |>
+  mutate(log_prod = difference(log(production), 12)) |>
+  features(log_prod, unitroot_ndiffs)
+```
+```{r}
+beer_ts |>
+  mutate(diff_prod = difference(production)) |>
+  features(diff_prod, unitroot_kpss)
+```
+
+
+```{r}
+beer_ts |>
+  model(
+    STL(log(production) ~ trend(window = 21) +
+                   season(window = "periodic"),
+    robust = TRUE)) |>
+  components() |>
+  autoplot()
+```
+
+## Arima
+
+```{r warning=FALSE}
+beer_ts |>
+  gg_tsdisplay(difference(log(production), 12)|>difference(),
+               plot_type='partial', lag=36) +
+  labs(title="Seasonally differenced", y="")
+```
+
+```{r}
+fit <- beer_ts |>
+  model(arima0111013 = ARIMA(log(production) ~ 0 + pdq(0,1,11)+PDQ(0,1,3)),
+        arima1110210 = ARIMA(log(production) ~ 0 + pdq(11,1,0)+PDQ(2,1,0)),
+        arima314111 = ARIMA(log(production) ~ 0 + pdq(3,1,4)+PDQ(1,1,1)),
+        arima310110 = ARIMA(log(production) ~ 0 + pdq(3,1,0)+PDQ(1,1,0)),
+        arima313112 = ARIMA(log(production) ~ 0 + pdq(3,1,3)+PDQ(1,1,2)),
+        auto = ARIMA(log(production), stepwise = FALSE, approximation = FALSE))
+```
+
+```{r}
+#beer_series <- as.ts(beer_ts$production)
+auto1 <- auto.arima(beer_ts$production , start.p = 0, max.p = 11, start.q = 0, max.q = 11, start.P = 0, max.P = 4, start.Q = 0, max.Q = 2)
+```
+
+```{r}
+auto1
+```
+
+
+```{r}
+fit |>
+  pivot_longer(everything(), names_to = "Model Name", values_to = "Orders")
+```
+
+```{r}
+glance(fit) |> arrange(AICc) |> select(.model:BIC)
+```
+
+```{r}
+fit |> select(arima314111) |> gg_tsresiduals(lag = 36)
+```
+
+
+```{r}
+augment(fit) |>
+  filter(.model == "arima314111") |>
+  features(.innov, ljung_box, lag=36)
+```
+
+
+```{r warning=FALSE, message=FALSE}
+forecast(fit, h=44) |>
+  filter(.model=='arima314111') |>
+  autoplot(beer_ts) +
+  autolayer(beer)+
+  labs(title = "Australia Beer Production (Monthly)",
+       y="Mega Litres")
+```
+
+```{r}
+accr
+```
+
+
+```{r}
+fit_new <- beer_ts |>
+  model (best = ARIMA (log (production),stepwise = FALSE, approximation = FALSE,order_constraint = p + q + P + Q <= 5))
+report (fit_new)
+```
+
+```{r}
+augment(fit_new) |>
+  features(.innov, ljung_box, lag=36, dof = 5)
+```
+```{r}
+fit|>
+  accuracy()|>arrange(RMSE)
+```
+
